@@ -37,13 +37,12 @@ if not os.path.exists(result_dir):
 # 로그 파일 경로 설정
 log_file = os.path.join(result_dir, "youtube_transcript.log")
 
-# 로깅 설정
+# 로깅 설정 - 콘솔 출력 없이 파일에만 로깅
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),  # 인코딩을 utf-8로 설정
-        logging.StreamHandler()
+        logging.FileHandler(log_file, encoding='utf-8')  # 인코딩을 utf-8로 설정, 콘솔 핸들러 제거
     ]
 )
 
@@ -254,9 +253,14 @@ def get_video_info(video_id: str) -> Dict:
     Returns:
         동영상 정보를 담은 딕셔너리
     """
+    # 로그 메시지를 파일에만 기록하기 위한 함수
+    def log_to_file(level, message):
+        with open(log_file, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - youtube_transcript - {level} - {message}\n")
+    
     # YouTube API 키가 없으면 기본 정보 반환
     if not YOUTUBE_API_KEY:
-        logger.warning("YouTube API 키가 설정되지 않았습니다. 동영상 정보를 가져올 수 없습니다.")
+        log_to_file("WARNING", "YouTube API 키가 설정되지 않았습니다. 동영상 정보를 가져올 수 없습니다.")
         return {"title": "알 수 없음", "description": "알 수 없음"}
     
     try:
@@ -270,7 +274,7 @@ def get_video_info(video_id: str) -> Dict:
         # 응답 데이터 처리
         data = response.json()
         if not data.get("items"):
-            logger.warning(f"동영상 정보를 찾을 수 없습니다: {video_id}")
+            log_to_file("WARNING", f"동영상 정보를 찾을 수 없습니다: {video_id}")
             return {"title": "알 수 없음", "description": "알 수 없음"}
         
         # 동영상 정보 추출
@@ -283,11 +287,11 @@ def get_video_info(video_id: str) -> Dict:
             "channelTitle": snippet.get("channelTitle", "알 수 없음")
         }
     except requests.exceptions.RequestException as e:
-        logger.error(f"YouTube API 요청 중 오류 발생: {e}")
+        log_to_file("ERROR", f"YouTube API 요청 중 오류 발생: {e}")
         # 오류 발생 시 기본 정보 반환
         return {"title": "알 수 없음", "description": "알 수 없음"}
     except Exception as e:
-        logger.error(f"동영상 정보를 가져오는 중 오류 발생: {e}")
+        log_to_file("ERROR", f"동영상 정보를 가져오는 중 오류 발생: {e}")
         raise APIError(f"동영상 정보를 가져오는 중 오류 발생: {e}")
 
 @handle_error
@@ -305,6 +309,11 @@ def get_transcript_with_api(video_id: str, languages: List[str] = None) -> Optio
     if languages is None:
         languages = DEFAULT_LANGUAGES
     
+    # 로그 메시지를 파일에만 기록하기 위한 함수
+    def log_to_file(level, message):
+        with open(log_file, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - youtube_transcript - {level} - {message}\n")
+    
     try:
         # 자막 목록 가져오기
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
@@ -314,7 +323,7 @@ def get_transcript_with_api(video_id: str, languages: List[str] = None) -> Optio
         for lang in languages:
             try:
                 transcript = transcript_list.find_transcript([lang])
-                logger.info(f"'{lang}' 언어로 자막을 찾았습니다.")
+                log_to_file("INFO", f"'{lang}' 언어로 자막을 찾았습니다.")
                 break
             except NoTranscriptFound:
                 continue
@@ -324,9 +333,9 @@ def get_transcript_with_api(video_id: str, languages: List[str] = None) -> Optio
             try:
                 # 자동 생성된 자막 중 첫 번째 것 선택
                 transcript = next(transcript_list)
-                logger.info(f"자동 생성된 자막을 사용합니다. 언어: {transcript.language}")
+                log_to_file("INFO", f"자동 생성된 자막을 사용합니다. 언어: {transcript.language}")
             except StopIteration:
-                logger.warning(f"동영상 {video_id}에 사용 가능한 자막이 없습니다.")
+                log_to_file("WARNING", f"동영상 {video_id}에 사용 가능한 자막이 없습니다.")
                 return None
         
         # 자막 가져오기
@@ -338,10 +347,10 @@ def get_transcript_with_api(video_id: str, languages: List[str] = None) -> Optio
         return transcript_text
         
     except (TranscriptsDisabled, NoTranscriptAvailable) as e:
-        logger.warning(f"youtube_transcript_api로 자막을 가져올 수 없습니다: {e}")
+        log_to_file("WARNING", f"youtube_transcript_api로 자막을 가져올 수 없습니다: {e}")
         return None
     except Exception as e:
-        logger.error(f"자막을 가져오는 중 오류 발생: {e}")
+        log_to_file("ERROR", f"자막을 가져오는 중 오류 발생: {e}")
         raise TranscriptError(f"자막을 가져오는 중 오류 발생: {e}")
 
 @handle_error
@@ -478,7 +487,18 @@ def summarize_text(text: str) -> Optional[str]:
             "max_tokens": 5000
         }
         
-        logger.info(f"OpenAI API 요청 중... (모델: {MODEL_NAME})")
+        # 로그 메시지를 파일에만 기록하고 콘솔에는 출력하지 않도록 수정
+        logger_handler = logging.FileHandler(log_file, encoding='utf-8')
+        logger_handler.setLevel(logging.INFO)
+        logger_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logger_handler.setFormatter(logger_formatter)
+        
+        temp_logger = logging.getLogger("temp_logger")
+        temp_logger.setLevel(logging.INFO)
+        temp_logger.addHandler(logger_handler)
+        temp_logger.propagate = False  # 상위 로거로 전파하지 않음
+        
+        temp_logger.info(f"OpenAI API 요청 중... (모델: {MODEL_NAME})")
         
         # API 요청
         response = requests.post(OPENAI_API_URL, headers=headers, json=payload)
@@ -493,7 +513,11 @@ def summarize_text(text: str) -> Optional[str]:
             api_usage["output_tokens"] += result["usage"]["completion_tokens"]
             
             # 로그에 사용량 기록
-            logger.info(f"API 사용량: 입력 토큰 {result['usage']['prompt_tokens']}개, 출력 토큰 {result['usage']['completion_tokens']}개")
+            temp_logger.info(f"API 사용량: 입력 토큰 {result['usage']['prompt_tokens']}개, 출력 토큰 {result['usage']['completion_tokens']}개")
+        
+        # 임시 로거 핸들러 제거
+        temp_logger.removeHandler(logger_handler)
+        logger_handler.close()
         
         return summary
     
@@ -522,7 +546,9 @@ def save_result(video_url: str, video_id: str, video_info: Dict, transcript: str
     # result 폴더 확인 (전역 변수 사용)
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
-        logger.info(f"'{result_dir}' 폴더를 생성했습니다.")
+        # 로그 메시지를 파일에만 기록
+        with open(log_file, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - youtube_transcript - INFO - '{result_dir}' 폴더를 생성했습니다.\n")
     
     # 현재 시간을 파일명에 포함
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -551,7 +577,10 @@ def save_result(video_url: str, video_id: str, video_info: Dict, transcript: str
             f.write(f"생성 시간: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("=" * 80 + "\n")
         
-        logger.info(f"결과가 '{filename}' 파일에 저장되었습니다.")
+        # 로그 메시지를 파일에만 기록
+        with open(log_file, "a", encoding="utf-8") as log:
+            log.write(f"{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - youtube_transcript - INFO - 결과가 '{filename}' 파일에 저장되었습니다.\n")
+        
         return filename
     
     except Exception as e:
@@ -565,6 +594,13 @@ def main():
     print("=" * 80)
     print("YouTube 자막 요약 도구")
     print("=" * 80)
+    
+    # 결과 정보를 저장할 딕셔너리
+    result_info = {
+        "video_title": "",
+        "transcript_length": 0,
+        "filename": ""
+    }
     
     # API 키 확인
     if not OPENAI_API_KEY:
@@ -587,38 +623,56 @@ def main():
     
     # 전체 작업 진행률을 표시할 tqdm 객체 생성
     print("\n작업 진행 상황:")
-    with tqdm.tqdm(total=100, desc="전체 진행률", 
-                  bar_format="{desc}: {percentage:3.0f}%|{bar}| [{elapsed}<{remaining}] {postfix}",
-                  postfix="준비 중...") as progress_bar:
+    with tqdm.tqdm(total=100, desc="진행률", 
+                  bar_format="{desc}: {percentage:3.0f}%|{bar}| {postfix}",
+                  postfix="준비 중...",
+                  ncols=80,  # 고정된 너비 설정
+                  leave=True,  # 진행률 바를 유지
+                  position=0,  # 첫 번째 위치에 고정
+                  dynamic_ncols=False,  # 너비 고정
+                  file=sys.stdout) as progress_bar:  # 표준 출력으로 설정
         
         # 1. 동영상 정보 가져오기 (20%)
         progress_bar.set_postfix_str("동영상 정보 가져오는 중...")
+        progress_bar.refresh()  # 명시적 새로고침
         video_info = get_video_info(video_id)
         
         # video_info가 None인 경우 기본값 설정
         if video_info is None:
             video_info = {"title": "알 수 없음", "description": "알 수 없음"}
         
-        print(f"\n동영상 제목: {video_info.get('title', '알 수 없음')}")
+        # 결과 정보 업데이트
+        result_info["video_title"] = video_info.get('title', '알 수 없음')
+        
+        # 진행률 업데이트
         progress_bar.update(20)  # 20% 진행
+        progress_bar.set_postfix_str(f"동영상 제목: {result_info['video_title']}")
+        progress_bar.refresh()  # 명시적 새로고침
         
         # 2. 자막 가져오기 (30%)
         progress_bar.set_postfix_str("자막 가져오는 중...")
+        progress_bar.refresh()  # 명시적 새로고침
         transcript = get_transcript_with_api(video_id)
         
         # youtube_transcript_api로 자막을 가져올 수 없는 경우 YouTube Data API 사용
         if transcript is None and YOUTUBE_API_KEY:
-            print("\nyoutube_transcript_api로 자막을 가져올 수 없어 YouTube Data API를 사용합니다...")
+            progress_bar.set_postfix_str("YouTube Data API로 자막 가져오는 중...")
             transcript = get_transcript_with_youtube_api(video_id)
         
         if transcript is None:
             exit_with_error("자막을 가져올 수 없습니다. 해당 동영상에 자막이 없거나 접근이 제한되어 있을 수 있습니다.")
         
-        print(f"\n자막 길이: {len(transcript)} 글자")
+        # 결과 정보 업데이트
+        result_info["transcript_length"] = len(transcript)
+        
+        # 진행률 업데이트
         progress_bar.update(30)  # 추가 30% 진행 (총 50%)
+        progress_bar.set_postfix_str(f"자막 길이: {result_info['transcript_length']} 글자")
+        progress_bar.refresh()  # 명시적 새로고침
         
         # 3. 자막 요약하기 (40%)
         progress_bar.set_postfix_str("자막 요약하는 중...")
+        progress_bar.refresh()  # 명시적 새로고침
         
         # 요약 시작 시간 기록
         summary_start_time = time.time()
@@ -629,9 +683,13 @@ def main():
             while elapsed < 30:  # 최대 30초 동안 업데이트
                 # 경과 시간에 따라 진행률 업데이트 (최대 35%까지)
                 progress = min(35, elapsed * 1.2)  # 초당 약 1.2%씩 증가
-                progress_bar.set_postfix_str(f"자막 요약하는 중... ({elapsed:.1f}초 경과)")
-                progress_bar.n = 50 + progress  # 50%에서 시작
-                progress_bar.refresh()
+                
+                # 진행률 바 업데이트 (스레드 안전하게)
+                with progress_bar._lock:
+                    progress_bar.set_postfix_str(f"자막 요약하는 중... ({elapsed:.1f}초 경과)")
+                    progress_bar.n = 50 + progress  # 50%에서 시작
+                    progress_bar.refresh()
+                
                 time.sleep(0.5)
                 elapsed = time.time() - summary_start_time
                 
@@ -655,24 +713,32 @@ def main():
         # 진행률 강제 업데이트
         progress_bar.n = 90  # 90%로 설정
         progress_bar.set_postfix_str("요약 완료")
-        progress_bar.refresh()
+        progress_bar.refresh()  # 명시적 새로고침
         
         if summary is None:
             exit_with_error("자막을 요약할 수 없습니다. API 키를 확인하거나 나중에 다시 시도해주세요.")
         
         # 4. 결과 저장하기 (10%)
         progress_bar.set_postfix_str("결과 저장하는 중...")
+        progress_bar.refresh()  # 명시적 새로고침
         filename = save_result(video_url, video_id, video_info, transcript, summary)
+        
+        # 결과 정보 업데이트
+        result_info["filename"] = filename
         
         # 완료
         progress_bar.update(10)  # 마지막 10% 진행 (총 100%)
         progress_bar.set_postfix_str("작업 완료!")
+        progress_bar.refresh()  # 명시적 새로고침
     
-    print("\n처리가 완료되었습니다.")
-    print(f"결과 파일: {filename}")
+    # 진행률 바 아래에 결과 정보 출력
+    print("\n\n처리가 완료되었습니다.")
+    print(f"동영상 제목: {result_info['video_title']}")
+    print(f"자막 길이: {result_info['transcript_length']} 글자")
+    print(f"결과 파일: {result_info['filename']}")
     
     # 결과 파일 경로를 절대 경로로 변환하여 표시
-    abs_path = os.path.abspath(filename)
+    abs_path = os.path.abspath(result_info['filename'])
     print(f"절대 경로: {abs_path}")
     
     # API 사용량 및 비용 표시
