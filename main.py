@@ -65,19 +65,13 @@ MODEL_NAME = "gpt-4o-mini"  # 요약에 사용할 모델
 # API 사용량 추적을 위한 변수
 api_usage = {
     "input_tokens": 0,
-    "output_tokens": 0,
-    "total_cost_usd": 0.0
+    "output_tokens": 0
 }
 
-# OpenAI API 가격 정보 (2024년 8월 기준)
-# 출처: https://platform.openai.com/settings/organization/limits
-OPENAI_PRICING = {
-    "gpt-4o-mini": {
-        "input_per_1k": 0.15,  # 달러/1K 토큰
-        "output_per_1k": 0.60,  # 달러/1K 토큰
-        "exchange_rate": 1450.0  # 달러 대 원화 환율 (2024년 8월 기준)
-    }
-}
+# GPT-4o-mini 모델 가격 (2024년 기준)
+PRICE_PER_TOKEN_PROMPT = 0.00015  # USD per token
+PRICE_PER_TOKEN_COMPLETION = 0.00060  # USD per token
+USD_TO_KRW_RATE = 1450  # 달러 대 원화 환율 (변동될 수 있음)
 
 # 예외 클래스 정의
 class YouTubeTranscriptError(Exception):
@@ -469,7 +463,7 @@ def summarize_text(text: str) -> Optional[str]:
 3. 언급된 기술적 요소, 방법론, 도구 등이 있다면 구체적으로 명시
 4. 중요한 결론이나 인사이트
 
-요약은 3,000 토큰 이내로 작성해주세요. 너무 짧지 않게 충분한 정보를 담되, 중요하지 않은 세부 사항은 생략해주세요.
+요약은 5,000 토큰 이내로 작성해주세요. 너무 짧지 않게 충분한 정보를 담되, 중요하지 않은 세부 사항은 생략해주세요.
 
 자막 내용:
 {text}"""
@@ -481,7 +475,7 @@ def summarize_text(text: str) -> Optional[str]:
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.3,
-            "max_tokens": 3000
+            "max_tokens": 5000
         }
         
         logger.info(f"OpenAI API 요청 중... (모델: {MODEL_NAME})")
@@ -684,12 +678,12 @@ def main():
     # API 사용량 및 비용 표시
     if api_usage["input_tokens"] > 0 or api_usage["output_tokens"] > 0:
         # 입력 및 출력 토큰 비용 계산
-        input_cost_usd = (api_usage["input_tokens"] / 1000) * OPENAI_PRICING[MODEL_NAME]["input_per_1k"]
-        output_cost_usd = (api_usage["output_tokens"] / 1000) * OPENAI_PRICING[MODEL_NAME]["output_per_1k"]
+        input_cost_usd = api_usage["input_tokens"] * PRICE_PER_TOKEN_PROMPT
+        output_cost_usd = api_usage["output_tokens"] * PRICE_PER_TOKEN_COMPLETION
         total_cost_usd = input_cost_usd + output_cost_usd
         
         # 원화 환산
-        exchange_rate = OPENAI_PRICING[MODEL_NAME]["exchange_rate"]
+        exchange_rate = USD_TO_KRW_RATE
         input_cost_krw = input_cost_usd * exchange_rate
         output_cost_krw = output_cost_usd * exchange_rate
         total_cost_krw = total_cost_usd * exchange_rate
@@ -698,15 +692,15 @@ def main():
         print("OpenAI API 사용량 및 비용")
         print("=" * 60)
         print(f"모델: {MODEL_NAME}")
-        print(f"입력 토큰: {api_usage['input_tokens']:,}개 (${input_cost_usd:.4f}, ₩{input_cost_krw:.0f})")
-        print(f"출력 토큰: {api_usage['output_tokens']:,}개 (${output_cost_usd:.4f}, ₩{output_cost_krw:.0f})")
+        print(f"입력 토큰: {api_usage['input_tokens']:,}개 (${input_cost_usd:.6f}, ₩{input_cost_krw:.2f})")
+        print(f"출력 토큰: {api_usage['output_tokens']:,}개 (${output_cost_usd:.6f}, ₩{output_cost_krw:.2f})")
         print(f"총 토큰: {api_usage['input_tokens'] + api_usage['output_tokens']:,}개")
         print("-" * 40)
-        print(f"총 비용 (USD): ${total_cost_usd:.4f}")
-        print(f"총 비용 (KRW): ₩{total_cost_krw:.0f}")
+        print(f"총 비용 (USD): ${total_cost_usd:.6f}")
+        print(f"총 비용 (KRW): ₩{total_cost_krw:.2f}")
         print("-" * 40)
-        print(f"가격 정보 출처: https://platform.openai.com/settings/organization/limits")
-        print(f"환율: $1 = ₩{exchange_rate:.0f} (2024년 8월 기준)")
+        print(f"가격 정보: 입력 ${PRICE_PER_TOKEN_PROMPT}/token, 출력 ${PRICE_PER_TOKEN_COMPLETION}/token")
+        print(f"환율: $1 = ₩{exchange_rate:.0f} (2024년 기준)")
         print("=" * 60)
 
 if __name__ == "__main__":
