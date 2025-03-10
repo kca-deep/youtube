@@ -67,9 +67,9 @@ api_usage = {
     "output_tokens": 0
 }
 
-# GPT-4o-mini 모델 가격 (2024년 기준)
-PRICE_PER_TOKEN_PROMPT = 0.00015  # USD per token
-PRICE_PER_TOKEN_COMPLETION = 0.00060  # USD per token
+# 토큰 비용 (1000토큰당)
+PRICE_PER_1K_TOKENS_INPUT = 0.00015  # USD per 1K tokens
+PRICE_PER_1K_TOKENS_OUTPUT = 0.00060  # USD per 1K tokens
 USD_TO_KRW_RATE = 1450  # 달러 대 원화 환율 (변동될 수 있음)
 
 # 예외 클래스 정의
@@ -744,8 +744,8 @@ def main():
     # API 사용량 및 비용 표시
     if api_usage["input_tokens"] > 0 or api_usage["output_tokens"] > 0:
         # 입력 및 출력 토큰 비용 계산
-        input_cost_usd = api_usage["input_tokens"] * PRICE_PER_TOKEN_PROMPT
-        output_cost_usd = api_usage["output_tokens"] * PRICE_PER_TOKEN_COMPLETION
+        input_cost_usd = (api_usage["input_tokens"] / 1000) * PRICE_PER_1K_TOKENS_INPUT
+        output_cost_usd = (api_usage["output_tokens"] / 1000) * PRICE_PER_1K_TOKENS_OUTPUT
         total_cost_usd = input_cost_usd + output_cost_usd
         
         # 원화 환산
@@ -765,7 +765,7 @@ def main():
         print(f"총 비용 (USD): ${total_cost_usd:.6f}")
         print(f"총 비용 (KRW): ₩{total_cost_krw:.2f}")
         print("-" * 40)
-        print(f"가격 정보: 입력 ${PRICE_PER_TOKEN_PROMPT}/token, 출력 ${PRICE_PER_TOKEN_COMPLETION}/token")
+        print(f"가격 정보: 입력 ${PRICE_PER_1K_TOKENS_INPUT}/1K tokens, 출력 ${PRICE_PER_1K_TOKENS_OUTPUT}/1K tokens")
         print(f"환율: $1 = ₩{exchange_rate:.0f} (2024년 기준)")
         print("=" * 60)
 
