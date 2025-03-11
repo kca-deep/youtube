@@ -328,7 +328,7 @@ def get_video_info(video_id: str) -> Dict:
 @handle_error
 def get_transcript_with_api(
     video_id: str, languages: List[str] = None
-) -> Optional[str]:
+) -> Optional[Union[str, Dict]]:
     """
     youtube_transcript_api를 사용하여 자막을 가져오는 함수
 
@@ -338,6 +338,7 @@ def get_transcript_with_api(
 
     Returns:
         결합된 자막 텍스트 또는 None (자막 없음)
+        또는 자막 텍스트와 타임스탬프 정보를 포함한 딕셔너리
     """
     if languages is None:
         languages = DEFAULT_LANGUAGES
@@ -381,10 +382,16 @@ def get_transcript_with_api(
         # 자막 가져오기
         transcript_data = transcript.fetch()
 
-        # 자막 텍스트 결합
+        # 자막 텍스트 결합 (기존 방식)
         transcript_text = " ".join([item["text"] for item in transcript_data])
 
-        return transcript_text
+        # 타임스탬프 정보를 포함한 딕셔너리 생성
+        transcript_with_timestamps = {
+            "text": transcript_text,
+            "segments": transcript_data,
+        }
+
+        return transcript_with_timestamps
 
     except (TranscriptsDisabled, NoTranscriptAvailable) as e:
         log_to_file(
@@ -397,7 +404,7 @@ def get_transcript_with_api(
 
 
 @handle_error
-def get_transcript_with_youtube_api(video_id: str) -> Optional[str]:
+def get_transcript_with_youtube_api(video_id: str) -> Optional[Union[str, Dict]]:
     """
     YouTube Data API v3를 사용하여 자막을 가져오는 함수
 
@@ -406,6 +413,7 @@ def get_transcript_with_youtube_api(video_id: str) -> Optional[str]:
 
     Returns:
         결합된 자막 텍스트 또는 None (자막 없음)
+        또는 자막 텍스트와 타임스탬프 정보를 포함한 딕셔너리
     """
     # YouTube API 키가 없으면 None 반환
     if not YOUTUBE_API_KEY:
@@ -469,10 +477,42 @@ def get_transcript_with_youtube_api(video_id: str) -> Optional[str]:
             srt_content = download_response.text
             transcript_text = srt_to_text(srt_content)
 
+            # SRT 파일에서 타임스탬프 정보 추출 (간단한 구현)
+            segments = []
+            try:
+                import re
+
+                pattern = r"(\d+:\d+:\d+,\d+) --> (\d+:\d+:\d+,\d+)\n(.*?)(?=\n\d+|\Z)"
+                matches = re.findall(pattern, srt_content, re.DOTALL)
+
+                for start_time, end_time, text in matches:
+                    # SRT 시간 형식을 초로 변환
+                    def time_to_seconds(time_str):
+                        h, m, s = time_str.replace(",", ".").split(":")
+                        return float(h) * 3600 + float(m) * 60 + float(s)
+
+                    start_seconds = time_to_seconds(start_time)
+                    end_seconds = time_to_seconds(end_time)
+
+                    segments.append(
+                        {
+                            "start": start_seconds,
+                            "duration": end_seconds - start_seconds,
+                            "text": text.strip(),
+                        }
+                    )
+            except Exception as e:
+                logger.warning(f"SRT 파싱 중 오류 발생: {e}")
+                # 오류 발생 시 빈 세그먼트 목록 사용
+                segments = []
+
             # 임시 파일 삭제
             os.unlink(temp_file_path)
 
-            return transcript_text
+            # 타임스탬프 정보를 포함한 딕셔너리 생성
+            transcript_with_timestamps = {"text": transcript_text, "segments": segments}
+
+            return transcript_with_timestamps
 
         except Exception as e:
             logger.error(f"캡션 다운로드 중 오류 발생: {e}")
@@ -490,12 +530,13 @@ def get_transcript_with_youtube_api(video_id: str) -> Optional[str]:
 
 
 @handle_error
-def summarize_text(text: str) -> Optional[str]:
+def summarize_text(text: str, segments: List = None) -> Optional[str]:
     """
     OpenAI API를 사용하여 텍스트를 요약하는 함수
 
     Args:
         text: 요약할 텍스트
+        segments: 자막 세그먼트 정보 (타임스탬프 포함)
 
     Returns:
         요약된 텍스트 또는 None (요약 실패 시)
@@ -511,18 +552,39 @@ def summarize_text(text: str) -> Optional[str]:
             "Authorization": f"Bearer {OPENAI_API_KEY}",
         }
 
-        # 요약 프롬프트 작성 (개선된 버전)
+        # 타임스탬프 정보 추가
+        timestamp_info = ""
+        if segments and len(segments) > 0:
+            timestamp_info = "\n\n자막 타임스탬프 정보 (참고용):\n"
+            # 최대 20개의 세그먼트 샘플 제공 (너무 많으면 토큰 낭비)
+            sample_size = min(20, len(segments))
+            step = max(1, len(segments) // sample_size)
+
+            sampled_segments = segments[::step][:sample_size]
+
+            for segment in sampled_segments:
+                start_time = segment.get("start", 0)
+                minutes = int(start_time // 60)
+                seconds = int(start_time % 60)
+                time_str = f"{minutes:02d}:{seconds:02d}"
+                timestamp_info += f"[{time_str}] {segment.get('text', '')}\n"
+
+        # 요약 프롬프트 작성 (타임라인 정보 포함 버전)
         prompt = f"""다음 YouTube 동영상 자막을 요약해주세요. 
 
 요약 시 다음 사항을 반드시 포함해주세요:
 1. 전체 내용의 핵심 주제와 목적
 
-2. 주요 토픽별 세부 내용 (시간 순서대로):
-   - 각 주요 토픽마다 소제목을 붙이고 구체적으로 설명해주세요
-   - 토픽별 핵심 개념과 아이디어를 명확하게 설명해주세요
-   - 예시, 사례, 데모 등이 있다면 함께 요약해주세요
+2. 타임라인별 주요 토픽 요약:
+   - 동영상의 흐름에 따라 타임라인을 구성해주세요 (예: [00:00-05:30] 주제 소개)
+   - 각 타임라인 구간마다 명확한 소제목을 붙이고 구체적으로 설명해주세요
+   - 타임라인별 핵심 개념과 아이디어를 상세하게 설명해주세요
+   - 예시, 사례, 데모, 코드 등이 있다면 구체적으로 요약해주세요
    - 발표자가 강조한 중요 포인트는 반드시 포함해주세요
-   - 토픽 간의 연결성과 흐름을 유지해주세요
+   - 각 타임라인 구간에서 언급된 기술적 용어나 개념을 명확히 설명해주세요
+   - 타임라인 간의 연결성과 흐름을 유지해주세요
+   - 각 타임라인 구간의 내용을 충분히 상세하게 설명하여 시청자가 관심 있는 부분만 찾아볼 수 있도록 해주세요
+   - 실제 시간을 정확히 알 수 없는 경우, 내용의 흐름에 따라 논리적으로 구간을 나누어 표시해주세요
 
 3. 기술적 요소 분석:
    - 언급된 모든 기술, 방법론, 도구, 프레임워크, 라이브러리 등을 구체적으로 명시
@@ -542,6 +604,7 @@ def summarize_text(text: str) -> Optional[str]:
    - 영상과 연계하여 학습하면 좋을 추천 주제
 
 요약은 6,000 토큰 이내로 작성해주세요. 너무 짧지 않게 충분한 정보를 담되, 중요하지 않은 세부 사항은 생략해주세요.
+{timestamp_info}
 
 자막 내용:
 {text}"""
@@ -551,7 +614,7 @@ def summarize_text(text: str) -> Optional[str]:
             "messages": [
                 {
                     "role": "system",
-                    "content": "당신은 YouTube 동영상 자막을 요약하는 전문가입니다. 특히 기술적 내용, 프로그래밍, 개발 관련 주제에 정통하며, 전체 내용을 포괄적으로 이해하고, 주요 토픽과 기술적 요소를 구체적으로 포함하여 명확하게 요약해주세요. 풍부하고 상세한 요약을 제공하되, 핵심 내용을 놓치지 않도록 하세요. 기술 용어와 개념을 정확히 파악하고, 학습자에게 도움이 될 추가 학습 방향도 제시해주세요.",
+                    "content": "당신은 YouTube 동영상 자막을 요약하는 전문가입니다. 특히 기술적 내용, 프로그래밍, 개발 관련 주제에 정통하며, 전체 내용을 포괄적으로 이해하고, 타임라인별 주요 토픽과 기술적 요소를 구체적으로 포함하여 명확하게 요약해주세요. 풍부하고 상세한 요약을 제공하되, 핵심 내용을 놓치지 않도록 하세요. 타임라인별 요약은 특히 상세하게 작성하여 시청자가 관심 있는 부분만 찾아볼 수 있도록 도와주세요. 기술 용어와 개념을 정확히 파악하고, 학습자에게 도움이 될 추가 학습 방향도 제시해주세요. 타임라인 정보는 가능한 한 정확하게 제공하되, 정확한 시간을 알 수 없는 경우 내용의 흐름에 따라 논리적으로 구간을 나누어 표시해주세요.",
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -607,7 +670,12 @@ def summarize_text(text: str) -> Optional[str]:
 
 @handle_error
 def save_result(
-    video_url: str, video_id: str, video_info: Dict, transcript: str, summary: str
+    video_url: str,
+    video_id: str,
+    video_info: Dict,
+    transcript: str,
+    summary: str,
+    segments: List = None,
 ) -> str:
     """
     결과를 텍스트 파일로 저장하는 함수
@@ -618,6 +686,7 @@ def save_result(
         video_info: 동영상 정보 딕셔너리
         transcript: 자막 텍스트
         summary: 요약 텍스트
+        segments: 자막 세그먼트 정보 (타임스탬프 포함)
 
     Returns:
         저장된 파일 경로
@@ -649,9 +718,9 @@ def save_result(
             f.write(f"게시일: {video_info.get('publishedAt', '알 수 없음')}\n\n")
 
             f.write("## 자막 정보\n")
-            f.write(f"자막 길이: {len(transcript)} 글자\n\n")
+            f.write(f"자막 길이: {len(transcript)} 글자\n")
 
-            f.write("## 요약 결과\n")
+            f.write("\n## 요약 결과\n")
             f.write(f"{summary}\n\n")
 
             f.write("=" * 80 + "\n")
@@ -766,17 +835,26 @@ def main():
         # 2. 자막 가져오기 (30%)
         progress_bar.set_postfix_str("자막 가져오는 중...")
         progress_bar.refresh()  # 명시적 새로고침
-        transcript = get_transcript_with_api(video_id)
+        transcript_data = get_transcript_with_api(video_id)
 
         # youtube_transcript_api로 자막을 가져올 수 없는 경우 YouTube Data API 사용
-        if transcript is None and YOUTUBE_API_KEY:
+        if transcript_data is None and YOUTUBE_API_KEY:
             progress_bar.set_postfix_str("YouTube Data API로 자막 가져오는 중...")
-            transcript = get_transcript_with_youtube_api(video_id)
+            transcript_data = get_transcript_with_youtube_api(video_id)
 
-        if transcript is None:
+        if transcript_data is None:
             exit_with_error(
                 "자막을 가져올 수 없습니다. 해당 동영상에 자막이 없거나 접근이 제한되어 있을 수 있습니다."
             )
+
+        # 자막 텍스트와 세그먼트 정보 추출
+        if isinstance(transcript_data, dict):
+            transcript = transcript_data["text"]
+            segments = transcript_data.get("segments", [])
+        else:
+            # 이전 버전과의 호환성을 위해 문자열도 처리
+            transcript = transcript_data
+            segments = []
 
         # 결과 정보 업데이트
         result_info["transcript_length"] = len(transcript)
@@ -825,7 +903,7 @@ def main():
         progress_thread.start()
 
         # 실제 요약 수행
-        summary = summarize_text(transcript)
+        summary = summarize_text(transcript, segments)
 
         # 요약 완료 표시
         update_progress.completed = True
@@ -844,7 +922,9 @@ def main():
         # 4. 결과 저장하기 (10%)
         progress_bar.set_postfix_str("결과 저장하는 중...")
         progress_bar.refresh()  # 명시적 새로고침
-        filename = save_result(video_url, video_id, video_info, transcript, summary)
+        filename = save_result(
+            video_url, video_id, video_info, transcript, summary, segments
+        )
 
         # 결과 정보 업데이트
         result_info["filename"] = filename
